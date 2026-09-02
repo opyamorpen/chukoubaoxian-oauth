@@ -1,0 +1,3 @@
+include:
+  - project: root/plugin-ci-template
+    file: /plugin-nodejs.yml

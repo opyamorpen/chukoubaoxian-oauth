@@ -1,0 +1,135 @@
+service:
+  app_id: 10ooadcx
+  name: 信保统一认证
+  description: 中国信保 OAuth2 单点登录与用户目录/组织架构同步(团队级插件)
+  version: 1.0.0
+  mode: team
+  logo: null
+  language: nodejs
+  language_version: 16.13.0
+  host_version: 1.0.4
+  host_sub_version: 1.0.0
+  min_system_version: 3.6.0
+  auth: null
+  config:
+    - key: ssoBaseUrl
+      label: 单点登录服务地址
+      type: Input
+      required: true
+      value: ''
+    - key: clientId
+      label: OAuth2 client_id
+      type: Input
+      required: true
+      value: 9ac3c0c8-c319-46c3-861e-b2e0b9e74952
+    - key: clientSecret
+      label: OAuth2 client_secret
+      type: Password
+      required: true
+      value: 27a33b8c-5703-4130-a9ef-00359cb41e13
+    - key: oaBaseUrl
+      label: OA 微服务平台地址
+      type: Input
+      required: true
+      value: http://oadev1.sinosure.com.cn
+    - key: eosSourceSysKey
+      label: OA 接口 X-EOS-SourceSysKey
+      type: Password
+      required: true
+      value: ae325d4b253c40f4a85b0165d1ea5e
+    - key: eosApiSubscriptionKey
+      label: OA 接口 X-EOS-ApiSubScriptionKey
+      type: Password
+      required: true
+      value: 1c097a752df348db857ef344e2787c8c
+    - key: emailSuffix
+      label: 无邮箱用户的邮箱拼接后缀
+      type: Input
+      required: true
+      value: '@sinosure.cn'
+    - key: rootDeptName
+      label: ONES 根部门名称
+      type: Input
+      required: true
+      value: 中国出口信用保险公司
+    - key: company
+      label: 用户 company 字段
+      type: Input
+      required: false
+      value: 中国信保
+    - key: excludeEmployeeTypes
+      label: 不同步的员工类别(逗号分隔:1个人,21兼职,22外包,23驻场,24交流,25实习,26其他)
+      type: Input
+      required: false
+      value: ''
+  scope: 1
+  policy:
+    policy: simple
+    target: ''
+apis: []
+modules: []
+abilities:
+  - id: sinosure-account
+    name: account
+    version: 1.0.0
+    abilityType: account
+    function:
+      sendMessage: SendMessage
+      createLoginUrl: CreateLoginUrl
+      doExchangeUser: DoExchangeUser
+      doPullData: DoPullData
+    config:
+      - key: canLogin
+        value: true
+        show: false
+      - key: canSync
+        value: true
+        show: false
+      - key: canMessage
+        value: false
+        show: false
+      - key: logo
+        value: logo.svg
+        show: false
+      - key: title
+        value: 中国信保统一认证
+        show: false
+      - key: desc
+        value: 使用中国信保内网统一账号登录 ONES
+        show: false
+      - key: detailTip
+        value: 点击后跳转中国信保单点登录页完成认证,首次使用请确认已由管理员完成目录同步
+        show: false
+      - key: configTip
+        value: 使用前请在插件配置中填写单点服务地址、client 凭据与 OA 接口密钥
+        show: false
+storage:
+  entities:
+    - name: sso_state
+      attributes:
+        value:
+          type: text
+          default: ''
+        updated_at:
+          type: text
+          default: ''
+    - name: sync_audit
+      attributes:
+        pulled_at:
+          type: text
+          default: ''
+        dept_count:
+          type: integer
+          length: 8
+          default: 0
+        user_count:
+          type: integer
+          length: 8
+          default: 0
+        skipped_count:
+          type: integer
+          length: 8
+          default: 0
+        error:
+          type: text
+          default: ''
