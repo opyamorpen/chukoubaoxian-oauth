@@ -1,20 +1,10 @@
 /**
  * 客户 OA 微服务平台接口客户端(用户目录 + 组织架构)。
- * 接口依据《人员接口文档》《企业微信通讯录获取所有一级及二级部门》:
- *   GET {base}/oa-usermanager/employee/select    全量人员(不含临时部门)
- *   GET {base}/oa-usermanager/department/appselect 全量一级部门与二级处室
- * 认证:两个静态请求头 X-EOS-SourceSysKey / X-EOS-ApiSubScriptionKey。
+ * 接口基础地址与两个接口路径均由配置页维护;
+ * 认证为两个静态请求头 X-EOS-SourceSysKey / X-EOS-ApiSubScriptionKey。
  */
 import { Fetch } from '@ones-op/fetch'
-
-export interface OaCredentials {
-  oaBaseUrl: string
-  eosSourceSysKey: string
-  eosApiSubscriptionKey: string
-}
-
-const EMPLOYEE_PATH = '/oa-usermanager/employee/select'
-const DEPARTMENT_PATH = '/oa-usermanager/department/appselect'
+import type { OaConfig } from './config'
 
 interface OaEnvelope {
   status?: string | number
@@ -22,14 +12,14 @@ interface OaEnvelope {
   data?: unknown[]
 }
 
-async function fetchOaList(credentials: OaCredentials, path: string, what: string): Promise<unknown[]> {
+async function fetchOaList(config: OaConfig, path: string, what: string): Promise<unknown[]> {
   let response
   try {
-    response = await Fetch(`${credentials.oaBaseUrl.replace(/\/+$/, '')}${path}`, {
+    response = await Fetch(`${config.baseUrl}${path.startsWith('/') ? path : `/${path}`}`, {
       method: 'GET',
       headers: {
-        'X-EOS-SourceSysKey': credentials.eosSourceSysKey,
-        'X-EOS-ApiSubScriptionKey': credentials.eosApiSubscriptionKey,
+        'X-EOS-SourceSysKey': config.sourceKey,
+        'X-EOS-ApiSubScriptionKey': config.apiSubKey,
       },
     })
   } catch (error) {
@@ -47,10 +37,10 @@ async function fetchOaList(credentials: OaCredentials, path: string, what: strin
   return body.data
 }
 
-export async function fetchOaEmployees(credentials: OaCredentials): Promise<unknown[]> {
-  return fetchOaList(credentials, EMPLOYEE_PATH, '人员')
+export async function fetchOaEmployees(config: OaConfig): Promise<unknown[]> {
+  return fetchOaList(config, config.empPath, '人员')
 }
 
-export async function fetchOaDepartments(credentials: OaCredentials): Promise<unknown[]> {
-  return fetchOaList(credentials, DEPARTMENT_PATH, '部门')
+export async function fetchOaDepartments(config: OaConfig): Promise<unknown[]> {
+  return fetchOaList(config, config.deptPath, '部门')
 }

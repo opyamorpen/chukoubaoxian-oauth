@@ -1,8 +1,8 @@
 service:
   app_id: 10ooadcx
-  name: 信保统一认证
-  description: 中国信保 OAuth2 单点登录与用户目录/组织架构同步(团队级插件)
-  version: 1.0.0
+  name: 统一身份登录与组织同步
+  description: 同步客户侧 OA 的两级组织和人员,并支持网页端 OAuth 2.0、OA 门户及客户 APP H5 token 登录 ONES(团队级插件)
+  version: 1.1.0
   mode: team
   logo: null
   language: nodejs
@@ -11,63 +11,51 @@ service:
   host_sub_version: 1.0.0
   min_system_version: 3.6.0
   auth: null
-  config:
-    - key: ssoBaseUrl
-      label: 单点登录服务地址
-      type: Input
-      required: true
-      value: ''
-    - key: clientId
-      label: OAuth2 client_id
-      type: Input
-      required: true
-      value: 9ac3c0c8-c319-46c3-861e-b2e0b9e74952
-    - key: clientSecret
-      label: OAuth2 client_secret
-      type: Password
-      required: true
-      value: 27a33b8c-5703-4130-a9ef-00359cb41e13
-    - key: oaBaseUrl
-      label: OA 微服务平台地址
-      type: Input
-      required: true
-      value: http://oadev1.sinosure.com.cn
-    - key: eosSourceSysKey
-      label: OA 接口 X-EOS-SourceSysKey
-      type: Password
-      required: true
-      value: ae325d4b253c40f4a85b0165d1ea5e
-    - key: eosApiSubscriptionKey
-      label: OA 接口 X-EOS-ApiSubScriptionKey
-      type: Password
-      required: true
-      value: 1c097a752df348db857ef344e2787c8c
-    - key: emailSuffix
-      label: 无邮箱用户的邮箱拼接后缀
-      type: Input
-      required: true
-      value: '@sinosure.cn'
-    - key: rootDeptName
-      label: ONES 根部门名称
-      type: Input
-      required: true
-      value: 中国出口信用保险公司
-    - key: company
-      label: 用户 company 字段
-      type: Input
-      required: false
-      value: 中国信保
-    - key: excludeEmployeeTypes
-      label: 不同步的员工类别(逗号分隔:1个人,21兼职,22外包,23驻场,24交流,25实习,26其他)
-      type: Input
-      required: false
-      value: ''
+  config: null
   scope: 1
   policy:
     policy: simple
     target: ''
-apis: []
-modules: []
+apis:
+  - type: addition
+    methods:
+      - POST
+    url: /config/get
+    function: apiConfigGet
+  - type: addition
+    methods:
+      - POST
+    url: /config/save
+    function: apiConfigSave
+  - type: addition
+    methods:
+      - POST
+    url: /config/test
+    function: apiConfigTest
+  - type: addition
+    methods:
+      - POST
+    url: /sync/manual
+    function: apiSyncManual
+  - type: addition
+    methods:
+      - POST
+    url: /sync/status
+    function: apiSyncStatus
+  - type: addition
+    methods:
+      - POST
+    url: /h5/verify
+    function: apiH5Verify
+modules:
+  - id: sinosure-settings
+    title: 统一身份与组织同步配置
+    moduleType: settings
+    entry: modules/sinosure-settings/index.html
+  - id: sinosure-h5-entry
+    title: APP H5 登录入口
+    moduleType: about:blank
+    entry: modules/sinosure-h5-entry/index.html
 abilities:
   - id: sinosure-account
     name: account
@@ -92,16 +80,16 @@ abilities:
         value: logo.svg
         show: false
       - key: title
-        value: 中国信保统一认证
+        value: 统一身份登录
         show: false
       - key: desc
-        value: 使用中国信保内网统一账号登录 ONES
+        value: 使用客户统一认证账号登录 ONES
         show: false
       - key: detailTip
-        value: 点击后跳转中国信保单点登录页完成认证,首次使用请确认已由管理员完成目录同步
+        value: 跳转客户统一认证平台完成认证;首次使用请确认管理员已完成组织人员同步
         show: false
       - key: configTip
-        value: 使用前请在插件配置中填写单点服务地址、client 凭据与 OA 接口密钥
+        value: 使用前请在「统一身份与组织同步配置」页完成必填配置
         show: false
 storage:
   entities:
@@ -111,6 +99,41 @@ storage:
           type: text
           default: ''
         updated_at:
+          type: text
+          default: ''
+    - name: plugin_config
+      attributes:
+        content:
+          type: text
+          default: ''
+        updated_at:
+          type: text
+          default: ''
+    - name: user_email_state
+      attributes:
+        email:
+          type: text
+          default: ''
+        is_virtual:
+          type: boolean
+          default: true
+    - name: dept_state
+      attributes:
+        name:
+          type: text
+          default: ''
+        parent_id:
+          type: text
+          default: ''
+        status:
+          type: text
+          default: active
+    - name: h5_code
+      attributes:
+        userid:
+          type: text
+          default: ''
+        expires_at:
           type: text
           default: ''
     - name: sync_audit
@@ -130,6 +153,13 @@ storage:
           type: integer
           length: 8
           default: 0
+        preserved_dept_count:
+          type: integer
+          length: 8
+          default: 0
+        trigger:
+          type: text
+          default: auto
         error:
           type: text
           default: ''

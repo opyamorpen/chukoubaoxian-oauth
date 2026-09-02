@@ -12,12 +12,43 @@ declare var ONESEntities: {
         };
         indexes: null;
     };
+    plugin_config: {
+        attributes: {
+            content?: string;
+            updated_at?: string;
+        };
+        indexes: null;
+    };
+    user_email_state: {
+        attributes: {
+            email?: string;
+            is_virtual?: boolean;
+        };
+        indexes: null;
+    };
+    dept_state: {
+        attributes: {
+            name?: string;
+            parent_id?: string;
+            status?: string;
+        };
+        indexes: null;
+    };
+    h5_code: {
+        attributes: {
+            userid?: string;
+            expires_at?: string;
+        };
+        indexes: null;
+    };
     sync_audit: {
         attributes: {
             pulled_at?: string;
             dept_count?: number;
             user_count?: number;
             skipped_count?: number;
+            preserved_dept_count?: number;
+            trigger?: string;
             error?: string;
         };
         indexes: null;

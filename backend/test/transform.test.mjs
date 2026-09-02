@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   ROOT_DEPT_ID,
   buildDepartments,
+  buildSyncPayload,
   buildUsers,
   fabricateEmail,
   isValidEmail,
@@ -125,7 +126,7 @@ test('buildUsers 常规映射:userid/姓名/邮箱/职位/处室', () => {
   })
 })
 
-test('buildUsers 无邮箱拼接、处室不在树中回退部门、缺 userid 跳过、类别过滤、重复保留首条', () => {
+test('buildUsers 无邮箱拼接、处室回退、缺 userid 跳过、类别过滤、重复保留首条', () => {
   const departments = buildDepartments([{ deptid: '3000', groupname: '山东分公司', division: [] }], '根')
   const options = {
     emailSuffix: '@sinosure.cn',
@@ -165,6 +166,101 @@ test('buildUsers 无邮箱拼接、处室不在树中回退部门、缺 userid �
   assert.ok(result.warnings.some((w) => w.includes('回退到所属部门')))
   assert.ok(result.warnings.some((w) => w.includes('格式异常')))
   assert.ok(result.warnings.some((w) => w.includes('重复')))
+})
+
+test('邮箱保留规则:虚拟邮箱粘性,OA 补齐真实邮箱不覆盖', () => {
+  const departments = buildDepartments([{ deptid: '10', groupname: 'A', division: [] }], '根')
+  const options = {
+    emailSuffix: '@sinosure.cn',
+    excludeEmployeeTypes: [],
+    knownDeptIds: departments.knownDeptIds,
+    company: 'c',
+    lastEmailState: new Map([
+      ['weish', { email: 'weish@sinosure.cn', isVirtual: true }],
+      ['zhangs', { email: 'zhangs@sinosure.cn', isVirtual: false }],
+    ]),
+  }
+  const result = buildUsers(
+    [
+      // 曾用虚拟邮箱,OA 现在补齐了真实邮箱 -> 保留虚拟邮箱
+      { userid: 'weish', name: '魏生辉', email: 'weish.real@sinosure.cn' },
+      // 原本就是真实邮箱 -> 跟随 OA 最新值
+      { userid: 'zhangs', name: '张三', email: 'zhangs.new@sinosure.cn' },
+    ],
+    options,
+  )
+
+  assert.equal(result.users[0].email, 'weish@sinosure.cn')
+  assert.equal(result.emailState.get('weish')?.isVirtual, true)
+  assert.equal(result.users[1].email, 'zhangs.new@sinosure.cn')
+  assert.equal(result.emailState.get('zhangs')?.isVirtual, false)
+  assert.ok(result.warnings.some((w) => w.includes('按保留规则继续使用虚拟邮箱')))
+})
+
+test('邮箱冲突:同批次两个 userid 解析出相同邮箱,后者跳过', () => {
+  const departments = buildDepartments([{ deptid: '10', groupname: 'A', division: [] }], '根')
+  // zhangs 无邮箱 -> 拼接 zhangs@sinosure.cn;另一个 userid 的真实邮箱恰好相同 -> 冲突
+  const result = buildUsers(
+    [
+      { userid: 'ZhangS', name: '甲' },
+      { userid: 'other', name: '乙', email: 'zhangs@sinosure.cn' },
+      { userid: 'ok', name: '丙', email: 'ok@sinosure.cn' },
+    ],
+    { emailSuffix: '@sinosure.cn', excludeEmployeeTypes: [], knownDeptIds: departments.knownDeptIds, company: 'c' },
+  )
+
+  assert.equal(result.users.length, 2)
+  assert.deepEqual(
+    result.users.map((u) => u.third_party_id).sort(),
+    ['ZhangS', 'ok'],
+  )
+  assert.ok(result.skipped.some((s) => s.id === 'other' && s.reason.includes('冲突')))
+})
+
+test('buildSyncPayload:消失部门被有效人员引用时保留,无人引用时移除', () => {
+  const previousDeptState = new Map([
+    ['-1', { name: '根', parentId: '', status: 'active' }],
+    ['10', { name: 'A部门', parentId: '-1', status: 'active' }],
+    ['11', { name: 'A处室', parentId: '10', status: 'active' }],
+    ['20', { name: 'B部门', parentId: '-1', status: 'active' }],
+    ['21', { name: 'B处室', parentId: '20', status: 'active' }],
+  ])
+
+  // 本轮 OA 只返回部门 10(处室 11 与部门 20/21 全部消失),但人员仍引用 11 和 20
+  const result = buildSyncPayload(
+    [{ deptid: '10', groupname: 'A部门', division: [] }],
+    [
+      { userid: 'u1', name: '甲', divisionNo: '11' },
+      { userid: 'u2', name: '乙', departmentNo: '20' },
+      { userid: 'u3', name: '丙', departmentNo: '10' },
+    ],
+    {
+      rootDeptName: '根',
+      emailSuffix: '@sinosure.cn',
+      excludeEmployeeTypes: [],
+      company: 'c',
+      previousDeptState,
+    },
+  )
+
+  // 保留被引用的 11、20;未被引用的 21 移除
+  const ids = result.departments.map((d) => d.third_party_id)
+  assert.ok(ids.includes('11'))
+  assert.ok(ids.includes('20'))
+  assert.ok(!ids.includes('21'))
+  assert.equal(result.preservedDeptCount, 2)
+  // 保留部门状态为 preserved,当前部门为 active
+  assert.equal(result.deptState.get('11')?.status, 'preserved')
+  assert.equal(result.deptState.get('10')?.status, 'active')
+  assert.equal(result.deptState.get('-1')?.status, 'active')
+  assert.ok(!result.deptState.has('21'))
+  // 人员归属保持
+  const u1 = result.users.find((u) => u.third_party_id === 'u1')
+  const u2 = result.users.find((u) => u.third_party_id === 'u2')
+  assert.deepEqual(u1?.department_ids, ['11'])
+  assert.deepEqual(u2?.department_ids, ['20'])
+  // 邮箱状态增量:三名新用户
+  assert.equal(result.emailStateChanges.size, 3)
 })
 
 test('normalizeProfile 解码中文、校验标识与状态', () => {

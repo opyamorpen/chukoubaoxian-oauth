@@ -11,7 +11,7 @@
     "packup": "op packup",
     "build:test": "op packup --bump no-modify",
     "build:release": "op packup --release --bump patch",
-    "test": "node --test backend/test/",
+    "test": "node --test backend/test/*.test.mjs",
     "prepare": "husky && op init"
   },
   "engines": {

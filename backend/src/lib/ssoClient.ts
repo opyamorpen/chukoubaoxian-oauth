@@ -1,18 +1,10 @@
 /**
- * 客户单点系统(基于 CAS 的 OAuth2.0)客户端。
- * 接口依据《OAuth2.0介绍与对接文档》:
- *   授权   GET  {base}/cas/oauth2.0/authorize
- *   换token POST {base}/cas/oauth2.0/accessToken
- *   用户信息 GET {base}/cas/oauth2.0/profile
- *   登出   GET  {base}/cas/oauth2.0/logout
+ * 客户统一认证平台(OAuth 2.0 授权码模式)客户端。
+ * 三个地址(授权/令牌/用户信息)均为配置页维护的完整 URL;
+ * 若历史配置只填了域名,自动补 /cas/oauth2.0/* 路径以保持兼容。
  */
 import { Fetch } from '@ones-op/fetch'
-
-export interface SsoCredentials {
-  ssoBaseUrl: string
-  clientId: string
-  clientSecret: string
-}
+import type { OAuthConfig } from './config'
 
 export interface SsoToken {
   accessToken: string
@@ -20,58 +12,36 @@ export interface SsoToken {
   expiresIn?: number
 }
 
-function joinUrl(base: string, path: string): string {
-  return `${base.replace(/\/+$/, '')}${path}`
+function fullUrl(url: string, fallbackPath: string): string {
+  const trimmed = url.trim().replace(/\/+$/, '')
+  // 仅域名(无路径)时补默认 CAS OAuth2 路径
+  if (/^https?:\/\/[^/]+$/.test(trimmed)) {
+    return `${trimmed}${fallbackPath}`
+  }
+  return trimmed
 }
 
-/** 响应可能是 JSON 字符串、JSON 对象或 CAS 表单格式,统一解析为对象 */
-function parseBody(data: unknown): Record<string, any> {
-  if (data && typeof data === 'object') {
-    return data as Record<string, any>
-  }
-  if (typeof data === 'string') {
-    const text = data.trim()
-    try {
-      return JSON.parse(text)
-    } catch {
-      // 兜底:access_token=xxx&refresh_token=yyy 形式
-      const params = new URLSearchParams(text)
-      const result: Record<string, any> = {}
-      params.forEach((value, key) => {
-        result[key] = value
-      })
-      return result
-    }
-  }
-  return {}
-}
-
-export function buildAuthorizeUrl(credentials: SsoCredentials, redirectUri: string): string {
+export function buildAuthorizeUrl(oauth: OAuthConfig, redirectUri: string): string {
   const query = new URLSearchParams({
     response_type: 'code',
-    client_id: credentials.clientId,
+    client_id: oauth.clientId,
     redirect_uri: redirectUri,
   })
-  return `${joinUrl(credentials.ssoBaseUrl, '/cas/oauth2.0/authorize')}?${query.toString()}`
+  return `${fullUrl(oauth.authorizeUrl, '/cas/oauth2.0/authorize')}?${query.toString()}`
 }
 
-export function buildLogoutUrl(ssoBaseUrl: string, serviceUrl: string): string {
-  const query = new URLSearchParams({ service: serviceUrl })
-  return `${joinUrl(ssoBaseUrl, '/cas/oauth2.0/logout')}?${query.toString()}`
-}
-
-/** 授权码换 access_token。redirect_uri 必须与授权请求一致,单点系统会校验。 */
+/** 授权码换 access_token。redirect_uri 必须与授权请求一致,认证平台会校验。 */
 export async function exchangeTokenByCode(
-  credentials: SsoCredentials,
+  oauth: OAuthConfig,
   code: string,
   redirectUri: string,
 ): Promise<SsoToken> {
-  const response = await Fetch(joinUrl(credentials.ssoBaseUrl, '/cas/oauth2.0/accessToken'), {
+  const response = await Fetch(fullUrl(oauth.tokenUrl, '/cas/oauth2.0/accessToken'), {
     method: 'POST',
     params: {
       grant_type: 'authorization_code',
-      client_id: credentials.clientId,
-      client_secret: credentials.clientSecret,
+      client_id: oauth.clientId,
+      client_secret: oauth.clientSecret,
       code,
       redirect_uri: redirectUri,
     },
@@ -89,10 +59,31 @@ export async function exchangeTokenByCode(
 }
 
 /** 用 access_token 获取用户信息。attributes 中文为 URL 编码,由 transform 层解码。 */
-export async function fetchProfile(ssoBaseUrl: string, accessToken: string): Promise<Record<string, any>> {
-  const response = await Fetch(joinUrl(ssoBaseUrl, '/cas/oauth2.0/profile'), {
+export async function fetchProfile(profileUrl: string, accessToken: string): Promise<Record<string, any>> {
+  const response = await Fetch(fullUrl(profileUrl, '/cas/oauth2.0/profile'), {
     method: 'GET',
     params: { access_token: accessToken },
   })
   return parseBody(response?.data)
+}
+
+/** 响应可能是 JSON 字符串、JSON 对象或 CAS 表单格式,统一解析为对象 */
+function parseBody(data: unknown): Record<string, any> {
+  if (data && typeof data === 'object') {
+    return data as Record<string, any>
+  }
+  if (typeof data === 'string') {
+    const text = data.trim()
+    try {
+      return JSON.parse(text)
+    } catch {
+      const params = new URLSearchParams(text)
+      const result: Record<string, any> = {}
+      params.forEach((value, key) => {
+        result[key] = value
+      })
+      return result
+    }
+  }
+  return {}
 }

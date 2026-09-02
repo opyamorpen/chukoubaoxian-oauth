@@ -1,73 +1,20 @@
 /**
  * ONES account 能力(对接三方系统)v1.0.0 实现。
- * 四个能力函数与客户两个系统的对接关系:
- * - CreateLoginUrl:返回单点系统 OAuth2 授权地址(登录入口由 ONES 依据本能力自动渲染)
- * - DoExchangeUser:code 换 token -> 拉 profile -> 返回用户标识,ONES 按 third_party_id 匹配已同步账号
- * - DoPullData:拉 OA 人员+部门接口 -> 组装根部门(-1)/部门/处室树与用户列表,ONES 每 10 分钟调度
+ * 四个能力函数与客户系统的对接:
+ * - CreateLoginUrl:返回统一认证平台授权地址(登录入口由 ONES 依据本能力自动渲染)
+ * - DoExchangeUser:code 换 token -> 拉用户信息 -> 返回 userid;
+ *   H5 一次性 code 优先:命中则直接返回对应身份(网页 OAuth2 与 APP H5 复用同一交换通道)
+ * - DoPullData:OA 人员+部门 -> 部门树/用户列表,ONES 每 10 分钟自动调度
  * - SendMessage:未启用消息推送(canMessage=false),保留桩实现
  */
 import { Logger } from '@ones-op/node-logger'
-import { storage } from '@ones-op/sdk/backend'
 import type { PluginRequest, PluginResponse } from '@ones-op/node-types'
-import { loadSettings } from './lib/settings'
+import { requireConfig, validateConfig } from './lib/config'
+import { getLastRedirectUri, saveLastRedirectUri } from './lib/ssoState'
 import { buildAuthorizeUrl, exchangeTokenByCode, fetchProfile } from './lib/ssoClient'
-import { fetchOaDepartments, fetchOaEmployees } from './lib/oaClient'
-import {
-  buildDepartments,
-  buildUsers,
-  fabricateEmail,
-  normalizeProfile,
-  type DepartmentInfo,
-  type UserInfo,
-} from './lib/transform'
-
-const LAST_REDIRECT_URI_KEY = 'last_redirect_uri'
-const AUDIT_LATEST_KEY = 'latest'
-
-async function saveLastRedirectUri(redirectUri: string): Promise<void> {
-  try {
-    await storage.entity('sso_state').set(LAST_REDIRECT_URI_KEY, {
-      value: redirectUri,
-      updated_at: new Date().toISOString(),
-    })
-  } catch (error) {
-    Logger.warning('[sinosure] 保存 redirect_uri 失败(将使用空值兜底):', error)
-  }
-}
-
-async function getLastRedirectUri(): Promise<string> {
-  try {
-    const record = (await storage.entity('sso_state').get(LAST_REDIRECT_URI_KEY)) as
-      | Record<string, unknown>
-      | undefined
-    return typeof record?.value === 'string' ? record.value : ''
-  } catch (error) {
-    Logger.warning('[sinosure] 读取 redirect_uri 失败:', error)
-    return ''
-  }
-}
-
-async function writeSyncAudit(record: {
-  deptCount: number
-  userCount: number
-  skippedCount: number
-  error: string
-}): Promise<void> {
-  const pulledAt = new Date().toISOString()
-  const attributes = {
-    pulled_at: pulledAt,
-    dept_count: record.deptCount,
-    user_count: record.userCount,
-    skipped_count: record.skippedCount,
-    error: record.error,
-  }
-  try {
-    await storage.entity('sync_audit').set(AUDIT_LATEST_KEY, attributes)
-    await storage.entity('sync_audit').set(pulledAt, attributes)
-  } catch (error) {
-    Logger.warning('[sinosure] 写入同步审计记录失败:', error)
-  }
-}
+import { consumeH5Code } from './lib/h5'
+import { fabricateEmail, normalizeProfile } from './lib/transform'
+import { runSync } from './lib/syncEngine'
 
 // ---------- account 能力响应结构(与官方模板一致) ----------
 
@@ -83,16 +30,7 @@ function CreateLoginUrlRespData(
   type: unknown,
   body: CreateLoginUrlResponse,
 ): PluginResponse {
-  return {
-    body: {
-      code,
-      errcode,
-      model,
-      reason,
-      type,
-      body,
-    },
-  }
+  return { body: { code, errcode, model, reason, type, body } }
 }
 
 interface DoExchangeUserResponse {
@@ -112,16 +50,7 @@ function DoExchangeUserRespData(
   type: unknown,
   body: DoExchangeUserResponse,
 ): PluginResponse {
-  return {
-    body: {
-      code,
-      errcode,
-      model,
-      reason,
-      type,
-      body,
-    },
-  }
+  return { body: { code, errcode, model, reason, type, body } }
 }
 
 function DoPullDataRespData(
@@ -130,34 +59,36 @@ function DoPullDataRespData(
   model: unknown,
   reason: unknown,
   type: unknown,
-  body: { departments: DepartmentInfo[]; users: UserInfo[] },
+  body: { departments: unknown[]; users: unknown[] },
 ): PluginResponse {
-  return {
-    body: {
-      code,
-      errcode,
-      model,
-      reason,
-      type,
-      body,
-    },
-  }
+  return { body: { code, errcode, model, reason, type, body } }
 }
 
-function sendMessageRespData(code: number, errcode: unknown, model: unknown, reason: unknown, type: unknown): PluginResponse {
-  return {
-    body: {
-      code,
-      errcode,
-      model,
-      reason,
-      type,
-    },
-  }
+function sendMessageRespData(
+  code: number,
+  errcode: unknown,
+  model: unknown,
+  reason: unknown,
+  type: unknown,
+): PluginResponse {
+  return { body: { code, errcode, model, reason, type } }
 }
 
 function failureReason(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+function parseAuthCode(request: PluginRequest | undefined): string {
+  const body = request?.body as Record<string, unknown> | undefined
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return ''
+  }
+  try {
+    const authInfo = typeof body.auth_info === 'string' ? JSON.parse(body.auth_info) : body.auth_info
+    return String((authInfo as Record<string, unknown>)?.code ?? '')
+  } catch {
+    return ''
+  }
 }
 
 // ---------- 能力函数 ----------
@@ -165,15 +96,22 @@ function failureReason(error: unknown): string {
 export async function CreateLoginUrl(request: PluginRequest): Promise<PluginResponse> {
   const empty: CreateLoginUrlResponse = { url: '' }
   try {
-    const redirectUrl = (request?.body as Record<string, unknown> | undefined)?.redirect_url
-    if (typeof redirectUrl !== 'string' || !redirectUrl) {
-      return CreateLoginUrlRespData(500, '', '', '缺少 redirect_url 参数', '', empty)
+    const config = await requireConfig()
+    const validation = validateConfig(config)
+    if (!validation.oauthReady) {
+      return CreateLoginUrlRespData(500, '', '', 'OAuth 2.0 配置不完整,统一身份登录暂不可用', '', empty)
     }
 
-    const settings = await loadSettings()
-    // 单点系统换 token 时校验 redirect_uri 必须与授权请求一致,先落库供 DoExchangeUser 使用
-    await saveLastRedirectUri(redirectUrl)
-    const url = buildAuthorizeUrl(settings, redirectUrl)
+    const requestRedirect = (request?.body as Record<string, unknown> | undefined)?.redirect_url
+    // 配置的回调地址优先;留空时使用 ONES 传入的 redirect_url
+    const redirectUri =
+      config.oauth.redirectUri || (typeof requestRedirect === 'string' ? requestRedirect : '')
+    if (!redirectUri) {
+      return CreateLoginUrlRespData(500, '', '', '缺少回调地址(请在配置页填写或由 ONES 登录流程传入)', '', empty)
+    }
+
+    await saveLastRedirectUri(redirectUri)
+    const url = buildAuthorizeUrl(config.oauth, redirectUri)
     Logger.info('[sinosure] CreateLoginUrl ->', url)
     return CreateLoginUrlRespData(200, '200', '', '', '', { url })
   } catch (error) {
@@ -191,92 +129,72 @@ export async function DoExchangeUser(request: PluginRequest): Promise<PluginResp
     phone: '',
   }
   try {
-    let code = ''
-    const body = request?.body as Record<string, unknown> | undefined
-    if (body && typeof body === 'object' && !Array.isArray(body)) {
-      try {
-        const authInfo = typeof body.auth_info === 'string' ? JSON.parse(body.auth_info) : body.auth_info
-        code = String((authInfo as Record<string, unknown>)?.code ?? '')
-      } catch {
-        code = ''
-      }
-    }
+    const code = parseAuthCode(request)
     if (!code) {
       return DoExchangeUserRespData(500, '', '', 'auth_info 中缺少授权码 code', '', empty)
     }
 
-    const settings = await loadSettings()
+    const config = await requireConfig()
+
+    // H5 一次性 code 优先(APP H5 登录复用同一身份交换通道)
+    const h5Userid = await consumeH5Code(code)
+    if (h5Userid) {
+      Logger.info('[sinosure] DoExchangeUser via H5 code, userid =', h5Userid)
+      return DoExchangeUserRespData(200, '', '', '', '', {
+        third_party_id: h5Userid,
+        name: h5Userid,
+        title: '',
+        avatar: '',
+        email: fabricateEmail(h5Userid, config.account.emailSuffix),
+        phone: '',
+      })
+    }
+
+    // 网页端 OAuth 2.0:code 换 token -> 拉用户信息
+    const validation = validateConfig(config)
+    if (!validation.oauthReady) {
+      return DoExchangeUserRespData(500, '', '', 'OAuth 2.0 配置不完整,统一身份登录暂不可用', '', empty)
+    }
     const redirectUri = await getLastRedirectUri()
-    const token = await exchangeTokenByCode(settings, code, redirectUri)
-    const profile = await fetchProfile(settings.ssoBaseUrl, token.accessToken)
+    const token = await exchangeTokenByCode(config.oauth, code, redirectUri)
+    const profile = await fetchProfile(config.oauth.profileUrl, token.accessToken)
 
     const normalized = normalizeProfile(profile)
     if (!normalized.ok) {
       return DoExchangeUserRespData(500, '', '', normalized.reason, '', empty)
     }
 
-    const response: DoExchangeUserResponse = {
+    Logger.info('[sinosure] DoExchangeUser ok, third_party_id =', normalized.userId)
+    return DoExchangeUserRespData(200, '', '', '', '', {
       third_party_id: normalized.userId,
       name: normalized.name,
       title: '',
       avatar: '',
-      // profile 无邮箱字段;与目录同步时的拼接规则保持一致,便于按邮箱绑定的场景兜底
-      email: fabricateEmail(normalized.userId, settings.emailSuffix),
+      // 统一认证不返回邮箱;与目录同步时的拼接规则保持一致,便于按邮箱绑定的场景兜底
+      email: fabricateEmail(normalized.userId, config.account.emailSuffix),
       phone: '',
-    }
-    Logger.info('[sinosure] DoExchangeUser ok, third_party_id =', normalized.userId)
-    return DoExchangeUserRespData(200, '', '', '', '', response)
+    })
   } catch (error) {
     return DoExchangeUserRespData(500, '', '', failureReason(error), '', empty)
   }
 }
 
 export async function DoPullData(_request: PluginRequest): Promise<PluginResponse> {
-  const empty = { departments: [] as DepartmentInfo[], users: [] as UserInfo[] }
+  const empty = { departments: [], users: [] }
   try {
-    const settings = await loadSettings()
-
-    let employees: unknown[] = []
-    let departments: unknown[] = []
-    try {
-      ;[employees, departments] = await Promise.all([
-        fetchOaEmployees(settings),
-        fetchOaDepartments(settings),
-      ])
-    } catch (error) {
-      const message = failureReason(error)
-      await writeSyncAudit({ deptCount: 0, userCount: 0, skippedCount: 0, error: message })
-      return DoPullDataRespData(500, '', '', message, '', empty)
+    const config = await requireConfig()
+    const validation = validateConfig(config)
+    if (!validation.oaReady) {
+      return DoPullDataRespData(500, '', '', 'OA 通讯录配置不完整,本次同步不执行', '', empty)
     }
 
-    const departmentResult = buildDepartments(departments, settings.rootDeptName)
-    const userResult = buildUsers(employees, {
-      emailSuffix: settings.emailSuffix,
-      excludeEmployeeTypes: settings.excludeEmployeeTypes,
-      knownDeptIds: departmentResult.knownDeptIds,
-      company: settings.company,
-    })
-
-    if (departmentResult.warnings.length > 0) {
-      Logger.warning('[sinosure] 部门数据告警:', departmentResult.warnings.join('; '))
+    const report = await runSync(config, 'auto', true)
+    if (!report.ok) {
+      return DoPullDataRespData(500, '', '', report.error ?? '同步失败', '', empty)
     }
-    if (userResult.warnings.length > 0) {
-      Logger.warning('[sinosure] 人员数据告警:', userResult.warnings.slice(0, 20).join('; '))
-    }
-
-    await writeSyncAudit({
-      deptCount: departmentResult.departments.length,
-      userCount: userResult.users.length,
-      skippedCount: departmentResult.skipped.length + userResult.skipped.length,
-      error: '',
-    })
-    Logger.info(
-      `[sinosure] DoPullData: 部门 ${departmentResult.departments.length}(含根部门), 用户 ${userResult.users.length}, 跳过 ${departmentResult.skipped.length + userResult.skipped.length}`,
-    )
-
     return DoPullDataRespData(200, '', '', '', '', {
-      departments: departmentResult.departments,
-      users: userResult.users,
+      departments: report.departments ?? [],
+      users: report.users ?? [],
     })
   } catch (error) {
     return DoPullDataRespData(500, '', '', failureReason(error), '', empty)

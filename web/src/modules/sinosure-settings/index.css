@@ -1,0 +1,55 @@
+#ones-mf-root .sinosure-settings {
+  padding: 16px 24px;
+  max-width: 860px;
+}
+
+#ones-mf-root .sinosure-header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+#ones-mf-root .sinosure-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+#ones-mf-root .sinosure-section-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+#ones-mf-root .sinosure-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 560px;
+}
+
+#ones-mf-root .sinosure-field-label {
+  font-weight: 500;
+}
+
+#ones-mf-root .sinosure-field-hint {
+  font-size: 12px;
+}
+
+#ones-mf-root .sinosure-sync-status {
+  padding: 12px;
+  background: #fafafa;
+  border-radius: 4px;
+}
+
+#ones-mf-root .sinosure-footer {
+  display: flex;
+  align-items: center;
+}
+
+#ones-mf-root .sinosure-loading {
+  padding: 24px;
+  color: #888;
+}
