@@ -3,7 +3,7 @@ service:
   name: 统一身份登录与组织同步
   description: 同步客户侧 OA 的两级组织和人员,并支持网页端 OAuth 2.0、OA 门户及客户 APP H5 token 登录 ONES(团队级插件)
   version: 1.1.0
-  mode: org
+  mode: team
   logo: null
   language: nodejs
   language_version: 16.13.0
